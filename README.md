@@ -2,6 +2,16 @@
 
 `routespec` generates an OpenAPI 3.1 document from annotated Next.js Route Handlers.
 
+## Install
+
+```bash
+npm install @natsuneko-laboratory/routespec
+```
+
+`next` and `zod` are peer dependencies and must already be present in your project.
+Installing the package also makes the `routespec` CLI available (e.g. via `npx routespec`
+or a `package.json` script).
+
 `openapi` can be defined in three equivalent ways; pick whichever fits the route best.
 
 ## Plan A: inline in `route.ts`

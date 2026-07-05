@@ -1,4 +1,4 @@
-#!/usr/bin/env tsx
+#!/usr/bin/env node
 import { parseArgs } from "node:util";
 import { generateOpenApi } from "./openapi";
 import type { GenerateOpenApiOptions } from "./types";
