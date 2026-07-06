@@ -90,6 +90,7 @@ export const generateOpenApi = async (
       }
 
       documentedRouteCount += 1;
+      ensureOpenApiExtensionForOperation(operation);
       registry.registerPath(toRegistryPath({ method, routePath, operation }));
     }
   }
@@ -147,6 +148,49 @@ export const generateOpenApi = async (
     undocumentedRoutes,
     written: true,
   };
+};
+
+// zod-to-openapi のジェネレーターは生成時にスキーマの .openapi() メソッドを呼ぶ
+// （例: request.params / query の shape 内スキーマへ param メタデータを付与する箇所）。
+// docs 内のスキーマは消費側プロジェクトの zod インスタンス製で、この CLI が
+// extendZodWithOpenApi() を適用した zod とは別インスタンスのことがある（tsx のモジュール
+// 名前空間の分裂）。zod モジュール自体には触れないが、スキーマインスタンスの
+// プロトタイプチェーンから ZodType.prototype を辿れるため、そこへ直接拡張を適用する
+const ensureOpenApiExtensionForOperation = (operation: OperationDoc) => {
+  ensureOpenApiExtension(operation.request?.params);
+  ensureOpenApiExtension(operation.request?.query);
+  ensureOpenApiExtension(operation.request?.body);
+  for (const response of Object.values(operation.responses)) {
+    ensureOpenApiExtension(response.schema);
+  }
+};
+
+const ensureOpenApiExtension = (schema: unknown) => {
+  if (!schema || typeof schema !== "object") {
+    return;
+  }
+
+  if (typeof (schema as { openapi?: unknown }).openapi === "function") {
+    return;
+  }
+
+  // Object.prototype 直下のプロトタイプ = ZodType.prototype（zod の全スキーマクラスの基底）
+  let proto = Object.getPrototypeOf(schema);
+  while (proto && Object.getPrototypeOf(proto) && Object.getPrototypeOf(proto) !== Object.prototype) {
+    proto = Object.getPrototypeOf(proto);
+  }
+
+  if (!proto) {
+    return;
+  }
+
+  // extendZodWithOpenApi は zod モジュールの ZodType.prototype / ZodObject.prototype に
+  // メソッドを定義・ラップするだけなので、実プロトタイプを差し込んだ疑似モジュールで代用できる
+  // （ZodObject 側は refId の派生伝播抑制用のラップのみで、ダミーでも動作に影響しない）
+  extendZodWithOpenApi({
+    ZodType: { prototype: proto },
+    ZodObject: { prototype: {} },
+  } as unknown as Parameters<typeof extendZodWithOpenApi>[0]);
 };
 
 const toRegistryPath = ({

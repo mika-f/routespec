@@ -11,13 +11,6 @@ import {
 import { resolveAliasPath } from "./tsconfig-paths";
 import type { RouteDocs } from "./types";
 
-// @asteasolutions/zod-to-openapi は routespec 自身の依存であり、生成したキャッシュファイルは
-// 消費側プロジェクトのディレクトリ配下に置かれる。ベア指定子のままだと pnpm 等の厳格な
-// node_modules レイアウトでは消費側のツリーから解決できず "Cannot find package" になるため、
-// routespec 自身のコンテキストで解決した絶対パスに固定する
-// （zod 自身は消費側と同一インスタンスである必要があるためベア指定子のままにする）
-const ZOD_TO_OPENAPI_SPECIFIER = import.meta.resolve("@asteasolutions/zod-to-openapi");
-
 type ExtractedModule = {
   openapi?: RouteDocs;
   default?: {
@@ -54,6 +47,9 @@ export const importOpenApiDocs = async (
     cacheDir,
     schemaModules: options.schemaModules ?? [],
   });
+  // 拡張子は元のルートファイルと同じ .ts にする（.mts で ESM を強制すると、"type": "module" を
+  // 持たないプロジェクトでは CJS として評価される共有スキーマ側と zod のモジュールインスタンスが
+  // 分裂し、extendZodWithOpenApi() の拡張が共有スキーマへ届かなくなる）
   const cacheFile = path.join(cacheDir, `${hashPath(source.filename)}.ts`);
 
   await mkdir(cacheDir, { recursive: true });
@@ -62,10 +58,9 @@ export const importOpenApiDocs = async (
   try {
     const cacheFileUrl = pathToFileURL(cacheFile).toString();
 
-    // tsx の tsImport() は呼び出しごとに独立したモジュール解決の名前空間を作るため、
-    // ここで別途 tsImport("zod", ...) して extendZodWithOpenApi() を適用しても、
-    // キャッシュファイル自身が import する zod とは別のモジュールインスタンスになり効果がない。
-    // そのため zod の拡張はキャッシュファイル自身の中で行う（extractOpenApiModuleSource 参照）。
+    // tsx の tsImport() は呼び出しごとに独立したモジュール解決の名前空間を作る。共有スキーマへの
+    // refId 付与はこの名前空間の分裂に影響されないよう、キャッシュファイル内の自己完結ヘルパーで
+    // 行う（extractOpenApiModuleSource 参照）
     const imported = (await tsImport(cacheFileUrl, cacheFileUrl)) as ExtractedModule;
     if (process.env.ROUTESPEC_DEBUG) {
       console.error(
@@ -78,7 +73,9 @@ export const importOpenApiDocs = async (
       components,
     };
   } finally {
-    await rm(cacheFile, { force: true });
+    if (!process.env.ROUTESPEC_KEEP_CACHE) {
+      await rm(cacheFile, { force: true });
+    }
   }
 };
 
@@ -141,13 +138,18 @@ const extractOpenApiModuleSource = (
     .map((statement) => rewriteImportDeclaration(statement, file, context));
 
   const moduleSource = [
-    // zod の拡張は、これから import する zod と同一のモジュールインスタンスに対して行う必要があるため、
-    // このキャッシュファイル自身の中で import & 拡張する（詳細は importOpenApiDocs のコメント参照）。
-    // また ESM の評価順序では import されたモジュール本体が先に評価されるため、注入した .openapi() は
-    // この拡張処理より必ず後（openapi 初期化子の評価時）に実行される
-    `import { extendZodWithOpenApi as __routespecExtendZodWithOpenApi } from ${JSON.stringify(ZOD_TO_OPENAPI_SPECIFIER)};`,
-    `import { z as __routespecZod } from "zod";`,
-    `__routespecExtendZodWithOpenApi(__routespecZod);`,
+    // 共有スキーマへの refId 付与は zod のプロトタイプ拡張（extendZodWithOpenApi）ではなく、
+    // _def.openapi へ直接書き込む自己完結のヘルパーで行う。プロトタイプ拡張はキャッシュファイルと
+    // 共有スキーマ側で zod のモジュールインスタンスが分裂する環境（tsx のローダー実装や Node の
+    // バージョンに依存して発生する）では届かないが、この方式はインスタンスの同一性に依存しない。
+    // 生成側（openapi.ts）も _def.openapi をプレーンなプロパティとして読むだけなので整合する
+    `const __routespecOpenapi = (schema: any, refId: string) => {`,
+    `  const def = schema._def;`,
+    `  return new schema.constructor({`,
+    `    ...def,`,
+    `    openapi: { ...def.openapi, _internal: { ...def.openapi?._internal, refId } },`,
+    `  });`,
+    `};`,
     ...imports,
     `export const openapi = ${initializerText};`,
     "",
@@ -176,11 +178,36 @@ const rewriteImportDeclaration = (
     return statement.getText(file);
   }
 
-  const relative = toModuleSpecifier(path.relative(cacheDir, absolute));
+  // 拡張子なしの相対指定子はキャッシュファイルが CJS として評価される環境の require() で
+  // 解決できないことがあるため、実ファイルを特定して拡張子付きのパスを埋め込む
+  const relative = toModuleSpecifier(path.relative(cacheDir, resolveModuleFilePath(absolute)));
 
   return statement
     .getText(file)
     .replace(statement.moduleSpecifier.getText(file), JSON.stringify(relative));
+};
+
+const MODULE_FILE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"];
+
+const resolveModuleFilePath = (basePath: string) => {
+  if (ts.sys.fileExists(basePath)) {
+    return basePath;
+  }
+
+  for (const extension of MODULE_FILE_EXTENSIONS) {
+    if (ts.sys.fileExists(`${basePath}${extension}`)) {
+      return `${basePath}${extension}`;
+    }
+  }
+
+  for (const extension of MODULE_FILE_EXTENSIONS) {
+    const indexPath = path.join(basePath, `index${extension}`);
+    if (ts.sys.fileExists(indexPath)) {
+      return indexPath;
+    }
+  }
+
+  return basePath;
 };
 
 const toModuleSpecifier = (value: string) => {

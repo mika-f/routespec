@@ -91,10 +91,12 @@ export const deriveComponentName = (exportedName: string) => {
     .join("");
 };
 
-// openapi 初期化子の中で共有スキーマを参照している識別子に .openapi("Name") を注入した
-// テキストと、注入したコンポーネントの一覧を返す。refId は文字列ベースで重複排除されるため、
-// tsImport がルートごとに独立したモジュール名前空間を作る制約（extractor.ts 参照）があっても
-// 同じ定数は同じ components/schemas エントリーに収束する
+// openapi 初期化子の中で共有スキーマを参照している識別子を __routespecOpenapi(X, "Name") で
+// 包んだテキストと、注入したコンポーネントの一覧を返す。ヘルパーはキャッシュファイル内で
+// 定義され（extractor.ts 参照）、zod のプロトタイプ拡張に依存せず _def.openapi へ直接 refId を
+// 書き込むため、共有スキーマ側の zod がキャッシュファイルと別モジュールインスタンスでも機能する。
+// refId は文字列ベースで重複排除されるため、tsImport がルートごとに独立したモジュール名前空間を
+// 作る制約があっても同じ定数は同じ components/schemas エントリーに収束する
 export const annotateSharedSchemaReferences = (
   initializer: ts.Expression,
   file: ts.SourceFile,
@@ -102,7 +104,7 @@ export const annotateSharedSchemaReferences = (
 ): { text: string; components: SchemaComponentRef[] } => {
   const initializerStart = initializer.getStart(file);
   const componentSources = new Map<string, string>();
-  const insertions: Array<{ offset: number; componentName: string }> = [];
+  const insertions: Array<{ offset: number; text: string }> = [];
 
   const visit = (node: ts.Node) => {
     if (ts.isIdentifier(node) && isSchemaValueReference(node)) {
@@ -118,7 +120,14 @@ export const annotateSharedSchemaReferences = (
         }
 
         componentSources.set(componentName, source);
-        insertions.push({ offset: node.getEnd() - initializerStart, componentName });
+        insertions.push({
+          offset: node.getStart(file) - initializerStart,
+          text: "__routespecOpenapi(",
+        });
+        insertions.push({
+          offset: node.getEnd() - initializerStart,
+          text: `, ${JSON.stringify(componentName)})`,
+        });
       }
     }
 
@@ -129,8 +138,8 @@ export const annotateSharedSchemaReferences = (
 
   let text = initializer.getText(file);
   // 先に計算したオフセットがずれないよう、後ろの挿入位置から順に適用する
-  for (const { offset, componentName } of insertions.sort((a, b) => b.offset - a.offset)) {
-    text = `${text.slice(0, offset)}.openapi(${JSON.stringify(componentName)})${text.slice(offset)}`;
+  for (const insertion of insertions.sort((a, b) => b.offset - a.offset)) {
+    text = `${text.slice(0, insertion.offset)}${insertion.text}${text.slice(insertion.offset)}`;
   }
 
   return {

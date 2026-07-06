@@ -86,7 +86,7 @@ describe("annotateSharedSchemaReferences", () => {
     return annotateSharedSchemaReferences(initializer, file, imports);
   };
 
-  it("共有スキーマの参照に .openapi(\"Name\") を注入する", () => {
+  it("共有スキーマの参照を __routespecOpenapi(X, \"Name\") で包む", () => {
     const { text, components } = annotate(
       `
       import { ERROR_RESPONSE_SCHEMA } from "@/lib/schema";
@@ -105,8 +105,10 @@ describe("annotateSharedSchemaReferences", () => {
       ["@/lib/schema"],
     );
 
-    expect(text).toContain(`schema: ERROR_RESPONSE_SCHEMA.openapi("ErrorResponse")`);
-    expect(text.match(/\.openapi\("ErrorResponse"\)/g)).toHaveLength(2);
+    expect(text).toContain(`schema: __routespecOpenapi(ERROR_RESPONSE_SCHEMA, "ErrorResponse")`);
+    expect(text.match(/__routespecOpenapi\(ERROR_RESPONSE_SCHEMA, "ErrorResponse"\)/g)).toHaveLength(
+      2,
+    );
     expect(components).toEqual([{ name: "ErrorResponse", source: "@/lib/schema#ERROR_RESPONSE_SCHEMA" }]);
   });
 
@@ -127,7 +129,9 @@ describe("annotateSharedSchemaReferences", () => {
       ["@/lib/schema"],
     );
 
-    expect(text).toContain(`status: STATUS_V1_0_RESPONSE_SCHEMA.openapi("StatusV1_0Response")`);
+    expect(text).toContain(
+      `status: __routespecOpenapi(STATUS_V1_0_RESPONSE_SCHEMA, "StatusV1_0Response")`,
+    );
   });
 
   it("プロパティアクセスやメソッド呼び出しの対象には注入しない", () => {
@@ -145,7 +149,7 @@ describe("annotateSharedSchemaReferences", () => {
     );
 
     expect(text).toContain("EDIT_STATUS_SCHEMA.partial()");
-    expect(text).not.toContain(".openapi(");
+    expect(text).not.toContain("__routespecOpenapi(");
     expect(components).toEqual([]);
   });
 
@@ -168,7 +172,7 @@ describe("annotateSharedSchemaReferences", () => {
 
     // query はパラメーターに分解されるため components にならない。body は対象
     expect(text).toContain("query: SUGGESTION_QUERY_SCHEMA,");
-    expect(text).toContain(`body: EDIT_STATUS_SCHEMA.openapi("EditStatus")`);
+    expect(text).toContain(`body: __routespecOpenapi(EDIT_STATUS_SCHEMA, "EditStatus")`);
     expect(components).toEqual([{ name: "EditStatus", source: "@/lib/schema#EDIT_STATUS_SCHEMA" }]);
   });
 
@@ -209,7 +213,7 @@ describe("annotateSharedSchemaReferences", () => {
       ["@/lib/schema"],
     );
 
-    expect(text).toContain(`schema: ERR.openapi("ErrorResponse")`);
+    expect(text).toContain(`schema: __routespecOpenapi(ERR, "ErrorResponse")`);
     expect(components).toEqual([{ name: "ErrorResponse", source: "@/lib/schema#ERROR_RESPONSE_SCHEMA" }]);
   });
 });
