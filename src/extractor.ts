@@ -10,6 +10,13 @@ import {
 } from "./components";
 import type { RouteDocs } from "./types";
 
+// @asteasolutions/zod-to-openapi は routespec 自身の依存であり、生成したキャッシュファイルは
+// 消費側プロジェクトのディレクトリ配下に置かれる。ベア指定子のままだと pnpm 等の厳格な
+// node_modules レイアウトでは消費側のツリーから解決できず "Cannot find package" になるため、
+// routespec 自身のコンテキストで解決した絶対パスに固定する
+// （zod 自身は消費側と同一インスタンスである必要があるためベア指定子のままにする）
+const ZOD_TO_OPENAPI_SPECIFIER = import.meta.resolve("@asteasolutions/zod-to-openapi");
+
 type ExtractedModule = {
   openapi?: RouteDocs;
   default?: {
@@ -137,7 +144,7 @@ const extractOpenApiModuleSource = (
     // このキャッシュファイル自身の中で import & 拡張する（詳細は importOpenApiDocs のコメント参照）。
     // また ESM の評価順序では import されたモジュール本体が先に評価されるため、注入した .openapi() は
     // この拡張処理より必ず後（openapi 初期化子の評価時）に実行される
-    `import { extendZodWithOpenApi as __routespecExtendZodWithOpenApi } from "@asteasolutions/zod-to-openapi";`,
+    `import { extendZodWithOpenApi as __routespecExtendZodWithOpenApi } from ${JSON.stringify(ZOD_TO_OPENAPI_SPECIFIER)};`,
     `import { z as __routespecZod } from "zod";`,
     `__routespecExtendZodWithOpenApi(__routespecZod);`,
     ...imports,
