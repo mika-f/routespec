@@ -1,7 +1,7 @@
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { tsImport } from "tsx/esm/api";
+import { register } from "tsx/esm/api";
 import ts from "typescript";
 import {
   annotateSharedSchemaReferences,
@@ -50,28 +50,32 @@ export const importOpenApiDocs = async (
   // 拡張子は元のルートファイルと同じ .ts にする（.mts で ESM を強制すると、"type": "module" を
   // 持たないプロジェクトでは CJS として評価される共有スキーマ側と zod のモジュールインスタンスが
   // 分裂し、extendZodWithOpenApi() の拡張が共有スキーマへ届かなくなる）
-  const cacheFile = path.join(cacheDir, `${hashPath(source.filename)}.ts`);
+  const cacheFile = path.join(cacheDir, `${hashPath(source.filename)}-${uniqueId()}.ts`);
 
   await mkdir(cacheDir, { recursive: true });
   await writeFile(cacheFile, moduleSource);
 
   try {
     const cacheFileUrl = pathToFileURL(cacheFile).toString();
+    // tsImport() の namespace query は Vercel の Node/tsx 組み合わせで依存 .ts import の
+    // 存在確認に混ざることがあるため、namespace なしの loader 登録で一時ファイルだけを読む
+    const unregister = register();
 
-    // tsx の tsImport() は呼び出しごとに独立したモジュール解決の名前空間を作る。共有スキーマへの
-    // refId 付与はこの名前空間の分裂に影響されないよう、キャッシュファイル内の自己完結ヘルパーで
-    // 行う（extractOpenApiModuleSource 参照）
-    const imported = (await tsImport(cacheFileUrl, cacheFileUrl)) as ExtractedModule;
-    if (process.env.ROUTESPEC_DEBUG) {
-      console.error(
-        `routespec: imported ${cacheFile} exports [${Object.keys(imported).join(", ")}]`,
-      );
+    try {
+      const imported = (await import(cacheFileUrl)) as ExtractedModule;
+      if (process.env.ROUTESPEC_DEBUG) {
+        console.error(
+          `routespec: imported ${cacheFile} exports [${Object.keys(imported).join(", ")}]`,
+        );
+      }
+
+      return {
+        docs: imported.openapi ?? imported.default?.openapi ?? imported["module.exports"]?.openapi,
+        components,
+      };
+    } finally {
+      await unregister();
     }
-
-    return {
-      docs: imported.openapi ?? imported.default?.openapi ?? imported["module.exports"]?.openapi,
-      components,
-    };
   } finally {
     if (!process.env.ROUTESPEC_KEEP_CACHE) {
       await rm(cacheFile, { force: true });
@@ -214,6 +218,9 @@ const toModuleSpecifier = (value: string) => {
   const normalized = value.split(path.sep).join("/");
   return normalized.startsWith(".") ? normalized : `./${normalized}`;
 };
+
+const uniqueId = () =>
+  `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 
 const hasOpenApiExport = (source: string, filename: string) => {
   const file = ts.createSourceFile(
