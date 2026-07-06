@@ -8,6 +8,7 @@ import {
   collectSchemaImports,
   type SchemaComponentRef,
 } from "./components";
+import { resolveAliasPath } from "./tsconfig-paths";
 import type { RouteDocs } from "./types";
 
 // @asteasolutions/zod-to-openapi は routespec 自身の依存であり、生成したキャッシュファイルは
@@ -165,11 +166,16 @@ const rewriteImportDeclaration = (
   }
 
   const specifier = statement.moduleSpecifier.text;
-  if (!specifier.startsWith("@/")) {
+  // tsconfig.json の paths マッピングを優先し、見つからない場合のみ
+  // 「@/foo -> <projectDir>/src/foo」という既定の規約にフォールバックする
+  const absolute =
+    resolveAliasPath(specifier, projectDir) ??
+    (specifier.startsWith("@/") ? path.join(projectDir, "src", specifier.slice(2)) : undefined);
+
+  if (!absolute) {
     return statement.getText(file);
   }
 
-  const absolute = path.join(projectDir, "src", specifier.slice(2));
   const relative = toModuleSpecifier(path.relative(cacheDir, absolute));
 
   return statement
