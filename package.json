@@ -1,6 +1,6 @@
 {
   "name": "@natsuneko-laboratory/routespec",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Generate OpenAPI documents from annotated Next.js Route Handlers.",
   "license": "MIT",
   "author": "MOCHIZUKI Kanon",
